@@ -1,1 +1,345 @@
+import os
+import sys
+import customtkinter as ctk
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import configparser
+import subprocess
+from tkinterdnd2 import DND_FILES, DND_TEXT, TkinterDnD
+
+SCRIPT_DIR = os.getcwd()
+INI_FILE = os.path.join(SCRIPT_DIR, "config.ini")
+
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+class ListItem(tk.Frame):
+    """
+    1つのリスト項目を表すウィジェット。
+    ボタンクリックで上へ/下へ移動できる。
+    """
+    def __init__(self, parent, app, index, file_path):
+        super().__init__(parent, bd=0, highlightthickness=0, bg="gray20")
+
+        self.app = app
+        self.index = index
+        self.file_path = file_path
+
+        # 内部の customtkinter フレーム
+        self.inner_frame = ctk.CTkFrame(self, corner_radius=0)
+        self.inner_frame.pack(fill="both", expand=True)
+        
+        self.updown_frame = ctk.CTkFrame(self.inner_frame, corner_radius=0)
+        self.updown_frame.pack(side="left", padx=5, pady=5)
+
+        # Upボタン (△)
+        up_btn = ctk.CTkButton(
+            self.updown_frame, text="△", 
+            width=20,  # 幅を小さめに
+            height=5, # 高さも小さめに
+            command=lambda idx=index: self.app.move_item_up(idx)
+        )
+        up_btn.pack(side="top", padx=5, pady=2)
+
+        # Downボタン (▽)
+        down_btn = ctk.CTkButton(
+            self.updown_frame, text="▽", 
+            width=20,
+            height=5,
+            command=lambda idx=index: self.app.move_item_down(idx)
+        )
+        down_btn.pack(side="top", padx=5, pady=2)
+
+        # チェックボックス
+        var = tk.BooleanVar()
+        self.app.check_vars.append(var)
+        check_btn = ctk.CTkCheckBox(self.inner_frame, variable=var, text="")
+        check_btn.pack(side="left", padx=5)
+
+        # ファイル名ラベル
+        f_label = ctk.CTkLabel(self.inner_frame, text=os.path.basename(file_path), anchor="w")
+        f_label.pack(side="left", expand=True, padx=10)
+
+        # 削除ボタン
+        del_btn = ctk.CTkButton(
+            self.inner_frame, text="削除", width=60,
+            command=lambda p=file_path: self.app.remove_single_file(p)
+        )
+        del_btn.pack(side="right", padx=5)
+
+        # 実行ボタン
+        run_btn = ctk.CTkButton(
+            self.inner_frame, text="実行", width=60,
+            command=lambda p=file_path: self.app.run_single_file(p)
+        )
+        run_btn.pack(side="right", padx=5)
+
+
+class FileManagerApp:
+    """
+    外部ファイルDnDで追加 + リスト内DnDで並び替え可能なファイル管理アプリ
+    """
+    def __init__(self):
+        # ==============
+        # メインウィンドウ: TkinterDnD
+        # ==============
+        self.root = TkinterDnD.Tk()
+        self.root.title("file_manager")
+        self.root.geometry("800x600")
+        self.root.resizable(False, False)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+        # ファイルリスト（実行順）を保持
+        self.file_list = []
+
+        # タイトルバーを消し、黒背景に
+        self.root.overrideredirect(True)
+        self.root.configure(bg="black")
+
+        # ==============
+        # 自作タイトルバー
+        # ==============
+        self.title_bar = tk.Frame(self.root, bg="black", height=30)
+        self.title_bar.pack(fill="x", side="top")
+
+        self.title_label = tk.Label(
+            self.title_bar,
+            text="file_manager",
+            bg="black", fg="white",
+            font=("Arial", 14, "bold")
+        )
+        self.title_label.pack(side="left", padx=10)
+
+        self.close_button = tk.Button(
+            self.title_bar,
+            text="✖",
+            bg="black", fg="white", bd=0,
+            command=self.on_closing
+        )
+        self.close_button.pack(side="right", padx=5)
+
+        # タイトルバーをドラッグで移動
+        self.title_bar.bind("<ButtonPress-1>", self.start_move)
+        self.title_bar.bind("<B1-Motion>", self.on_move)
+
+        # ==============
+        # CustomTkinter メインフレーム
+        # ==============
+        self.main_frame = ctk.CTkFrame(self.root, corner_radius=15)
+        self.main_frame.pack(padx=20, pady=20, fill="both", expand=True)
+
+        self.header_label = ctk.CTkLabel(self.main_frame, text="file_manager", font=("Arial", 24, "bold"))
+        self.header_label.pack(pady=10)
+
+        # スクロールフレーム (リスト表示)
+        self.list_frame = ctk.CTkScrollableFrame(self.main_frame, corner_radius=15, height=250)
+        self.list_frame.pack(pady=10, padx=15, fill="both", expand=True)
+
+        # 外部ファイルDnD → root に適用
+        self.root.drop_target_register(DND_FILES)
+        self.root.dnd_bind("<<Drop>>", self.on_drop_external)
+
+        # ボタンフレーム
+        self.button_frame = ctk.CTkFrame(self.main_frame, corner_radius=15)
+        self.button_frame.pack(pady=10)
+
+        self.add_button = ctk.CTkButton(self.button_frame, text="ファイル追加", command=self.add_file, width=120)
+        self.add_button.pack(side="left", padx=5)
+
+        self.save_button = ctk.CTkButton(self.button_frame, text="保存", command=self.save_config, width=120)
+        self.save_button.pack(side="left", padx=5)
+
+        self.remove_button = ctk.CTkButton(self.button_frame, text="削除", command=self.remove_checked_files, width=120)
+        self.remove_button.pack(side="left", padx=5)
+
+        self.run_button = ctk.CTkButton(self.button_frame, text="実行", command=self.run_checked_files, width=120)
+        self.run_button.pack(side="left", padx=5)
+
+        self.toggle_check_button = ctk.CTkButton(self.main_frame, text="すべて選択/解除", command=self.toggle_all_checks, width=120)
+        self.toggle_check_button.pack(pady=5)
+
+        # テーマ切り替え
+        self.theme_switch = ctk.CTkSwitch(self.main_frame, text="ダークモード", command=self.toggle_theme)
+        self.theme_switch.pack(pady=10)
+
+        # INIファイル読み込み
+        self.load_config()
+
+    # ==========================
+    # タイトルバー移動
+    # ==========================
+    def start_move(self, event):
+        self._x = event.x
+        self._y = event.y
+
+    def on_move(self, event):
+        dx = event.x - self._x
+        dy = event.y - self._y
+        x = self.root.winfo_x() + dx
+        y = self.root.winfo_y() + dy
+        self.root.geometry(f"+{x}+{y}")
+
+    def on_closing(self):
+        if messagebox.askokcancel("終了", "アプリを終了しますか？"):
+            self.root.quit()
+            self.root.destroy()
+            sys.exit()
+
+    # ==========================
+    # メインループ開始
+    # ==========================
+    def run(self):
+        self.root.mainloop()
+
+    # ==========================
+    # 外部ファイルDnDで追加
+    # ==========================
+    def on_drop_external(self, event):
+        files = self.root.tk.splitlist(event.data)
+        for f in files:
+            if os.path.isfile(f):
+                self.file_list.append(f)
+        self.save_config()
+        self.load_config()
+
+    # ==========================
+    # 手動ファイル追加
+    # ==========================
+    def add_file(self):
+        path = filedialog.askopenfilename(filetypes=[("すべてのファイル", "*.*")])
+        if path:
+            self.file_list.append(path)
+            self.save_config()
+            self.load_config()
+
+    # ==========================
+    # リスト並び替え
+    # ==========================
+    def reorder_item(self, from_idx, to_idx):
+        print(f"reorder_item called: from={from_idx}, to={to_idx}")
+        if 0 <= from_idx < len(self.file_list) and 0 <= to_idx < len(self.file_list):
+            item = self.file_list.pop(from_idx)
+            self.file_list.insert(to_idx, item)
+            self.update_file_list()
+
+    # ==========================
+    # リスト再描画
+    # ==========================
+    def update_file_list(self):
+        for widget in self.list_frame.winfo_children():
+            widget.destroy()
+
+        self.check_vars = []
+
+        for idx, path in enumerate(self.file_list):
+            row = ListItem(self.list_frame, self, idx, path)
+            row.pack(fill="x", pady=2, padx=2)
+
+    def remove_checked_files(self):
+        selected_files = [f for var, f in zip(self.check_vars, self.file_list) if var.get()]
+        if not selected_files:
+            messagebox.showwarning("警告", "削除するファイルを選択してください。")
+            return
+        if messagebox.askyesno("確認", "選択したファイルを削除しますか？"):
+            self.file_list = [f for f in self.file_list if f not in selected_files]
+            self.update_file_list()
+
+    def remove_single_file(self, path):
+        if messagebox.askyesno("確認", f"このファイルを削除しますか？\n{path}"):
+            self.file_list.remove(path)
+            self.update_file_list()
+            
+    # ==========================
+    # 上/下移動ボタンのコールバック
+    # ==========================
+    def move_item_up(self, index):
+        """index番目の要素を1つ上へ（index-1と交換）"""
+        if index > 0:
+            self.file_list[index], self.file_list[index - 1] = self.file_list[index - 1], self.file_list[index]
+            self.update_file_list()
+
+    def move_item_down(self, index):
+        """index番目の要素を1つ下へ（index+1と交換）"""
+        if index < len(self.file_list) - 1:
+            self.file_list[index], self.file_list[index + 1] = self.file_list[index + 1], self.file_list[index]
+            self.update_file_list()
+
+
+    # ==========================
+    # 実行
+    # ==========================
+    def run_checked_files(self):
+        selected_files = [f for var, f in zip(self.check_vars, self.file_list) if var.get()]
+        if not selected_files:
+            messagebox.showwarning("警告", "実行するファイルを選択してください。")
+            return
+        for f in selected_files:
+            self.run_single_file(f)
+
+    def run_single_file(self, path):
+        if not messagebox.askyesno("確認", f"このファイルを実行しますか？\n{path}"):
+            return
+        try:
+            ext = os.path.splitext(path)[1].lower()
+            if ext in [".xlsx", ".xls"]:
+                if sys.platform.startswith("win"):
+                    os.startfile(path)
+                else:
+                    raise Exception("Excelファイルの実行はWindowsのみ対応")
+            elif ext == ".ps1":
+                if sys.platform.startswith("win"):
+                    subprocess.run(["wt", "powershell", "-ExecutionPolicy", "Bypass", "-File", path], check=True)
+                else:
+                    raise Exception("PowerShell スクリプトはWindowsのみ対応")
+            else:
+                raise Exception("対応していないファイル形式")
+        except Exception as e:
+            messagebox.showerror("エラー", f"実行中にエラーが発生しました。\n{str(e)}")
+
+    def toggle_all_checks(self):
+        if all(v.get() for v in self.check_vars):
+            for v in self.check_vars:
+                v.set(False)
+        else:
+            for v in self.check_vars:
+                v.set(True)
+
+    def toggle_theme(self):
+        if self.theme_switch.get():
+            ctk.set_appearance_mode("light")
+            self.theme_switch.configure(text="ダークモード")
+        else:
+            ctk.set_appearance_mode("dark")
+            self.theme_switch.configure(text="ライトモード")
+
+    # ==========================
+    # INIファイルの保存・読み込み
+    # ==========================
+    def save_config(self):
+        config = configparser.ConfigParser()
+        config["Files"] = {f"file_{i}": p for i, p in enumerate(self.file_list)}
+        try:
+            with open(INI_FILE, "w") as f:
+                config.write(f)
+        except Exception as e:
+            messagebox.showerror("エラー", f"設定の保存中にエラーが発生しました。\n{str(e)}")
+
+    def load_config(self):
+        if os.path.exists(INI_FILE):
+            config = configparser.ConfigParser()
+            try:
+                config.read(INI_FILE)
+                self.file_list = [config["Files"][k] for k in sorted(config["Files"])]
+                # パスが存在しないものを除外
+                self.file_list = [f for f in self.file_list if os.path.exists(f)]
+                self.update_file_list()
+            except Exception as e:
+                messagebox.showerror("エラー", f"設定の読み込み中にエラーが発生しました。\n{str(e)}")
+        else:
+            self.save_config()
+
+
+
+if __name__ == "__main__":
+    app = FileManagerApp()
+    app.run()
 
