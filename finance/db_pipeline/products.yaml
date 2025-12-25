@@ -1,0 +1,32 @@
+products:
+  OIS:
+    table: ois_quotes
+    db_columns: [BaseDate, 通貨, Grid, レート, QuoteTime]
+    required_select_columns: [BaseDate, 通貨, Grid, レート, QuoteTime]
+    column_map:
+      BaseDate: base_date
+      通貨: ccy
+      Grid: grid
+      レート: rate
+      QuoteTime: quote_time
+    dimensions:
+      ccy: 通貨
+    required_dimensions: [ccy]
+    static_filters: []
+
+  IRS:
+    table: irs_quotes
+    db_columns: [BaseDate, 通貨, 補足, Grid, レート, QuoteTime]
+    required_select_columns: [BaseDate, 通貨, 補足, Grid, レート, QuoteTime]
+    column_map:
+      BaseDate: base_date
+      通貨: ccy
+      補足: extra
+      Grid: grid
+      レート: rate
+      QuoteTime: quote_time
+    dimensions:
+      ccy: 通貨
+      extra: 補足
+    required_dimensions: [ccy, extra]
+    static_filters: []
