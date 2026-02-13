@@ -1,0 +1,773 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Excel-like Viewer (Fixed Layout / No Node)</title>
+  <style>
+    :root {
+      font-family: Calibri, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      line-height: 1.1;
+      color-scheme: light;
+      --gridline: #cfcfcf;
+      --border: #2f2f2f;
+      --pink: #f6c8ea;
+      --green: #cfeac8;
+      --blue: #cfe5ff;
+    }
+    body { margin: 0; background: #f2f2f2; color: #111; }
+
+    .app {
+      display: grid;
+      grid-template-rows: 44px 1fr 340px;
+      height: 100vh;
+    }
+
+    .topbar {
+      height: 44px;
+      display:flex; align-items:center; gap: 12px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--gridline);
+      background: #fff;
+    }
+    .title { font-weight: 800; }
+    .small { font-size: 12px; opacity: 0.8; }
+    select {
+      background: #fff; color: #111;
+      border: 1px solid #cfcfcf;
+      border-radius: 8px;
+      padding: 6px 10px;
+    }
+    .zoom { width: 140px; }
+
+    /* ===== Sheet area ===== */
+    .sheetWrap {
+      overflow: auto;
+      position: relative;
+      background: #fff;
+      outline: none;
+    }
+
+    /* Sticky top currency header */
+    .stickyTop {
+      position: sticky;
+      top: 0;
+      z-index: 80;
+      background: #fff;
+      border-bottom: 1px solid var(--gridline);
+      display: flex;
+      height: 34px;
+    }
+    .corner {
+      width: 110px;
+      height: 34px;
+      border-right: 1px solid var(--gridline);
+      display:flex; align-items:center; padding: 0 8px;
+      font-weight: 700;
+      box-sizing: border-box;
+    }
+    .ccyHeaderRow { display:flex; height: 34px; align-items: stretch; }
+    .ccyHeader {
+      width: 380px;
+      border-right: 1px solid var(--gridline);
+      display:flex; align-items:center; justify-content:center;
+      font-weight: 800;
+      box-sizing: border-box;
+    }
+
+    /* Layer container inside sheetWrap */
+    .layer {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Sticky left product labels: ABSOLUTE width so it won't cover the grid */
+    .leftCol {
+      position: sticky;
+      left: 0;
+      top: 34px; /* below stickyTop */
+      width: 110px;
+      z-index: 70;
+      background: #fff;
+      border-right: 1px solid var(--gridline);
+      box-sizing: border-box;
+    }
+    .leftColInner {
+      position: relative;
+      transform-origin: top left;
+    }
+    .rowHeader {
+      width: 110px;
+      height: 290px;
+      border-bottom: 1px solid var(--gridline);
+      display:flex; align-items:flex-start; padding: 10px 8px;
+      font-weight: 800;
+      background: #fff;
+      position: absolute;
+      left: 0px;
+      box-sizing: border-box;
+    }
+
+    /* Canvas of blocks */
+    .canvas {
+      position: absolute;
+      left: 110px;
+      top: 34px;
+      transform-origin: top left;
+    }
+
+    .block {
+      width: 380px;
+      height: 290px;
+      border: 2px solid var(--border);
+      box-sizing: border-box;
+      background: #fff;
+      position: absolute;
+      user-select: none;
+    }
+    .block.selected { outline: 3px solid #000; outline-offset: 1px; }
+
+    .blockHeader {
+      display:grid;
+      grid-template-columns: 52px 86px 104px 1fr;
+      height: 28px;
+      border-bottom: 2px solid var(--border);
+      background: var(--blue);
+      font-weight: 700;
+      font-size: 12px;
+    }
+    .hcell { padding: 5px 6px; border-right: 1px solid var(--border); display:flex; align-items:center; box-sizing:border-box; }
+    .hcell:last-child { border-right: none; }
+
+    .blockBody {
+      display:grid;
+      grid-template-columns: 52px 86px 104px 1fr;
+      height: calc(100% - 28px);
+      background: var(--pink);
+      font-size: 12px;
+    }
+    .tcell {
+      background: var(--green);
+      border-right: 1px solid var(--border);
+      padding: 3px 6px;
+      border-bottom: 1px solid rgba(0,0,0,0.18);
+      font-size: 11px;
+      display:flex; align-items:center;
+      box-sizing:border-box;
+    }
+    .vcell {
+      padding: 3px 6px;
+      border-right: 1px solid rgba(0,0,0,0.18);
+      border-bottom: 1px solid rgba(0,0,0,0.18);
+      display:flex; align-items:center; justify-content:flex-end;
+      font-variant-numeric: tabular-nums;
+      box-sizing:border-box;
+    }
+    .diffcell {
+      padding: 0 6px;
+      border-bottom: 1px solid rgba(0,0,0,0.18);
+      display:flex; align-items:center;
+      box-sizing:border-box;
+    }
+    .diffSvg { display:block; }
+    .zeroLine { stroke: rgba(0,0,0,0.25); stroke-width: 1; }
+
+    /* ===== Bottom detail area (always visible) ===== */
+    .detail {
+      border-top: 1px solid var(--gridline);
+      background: #fff;
+      padding: 10px 12px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      overflow: hidden;
+    }
+    .card {
+      border: 1px solid #d0d0d0;
+      border-radius: 10px;
+      padding: 8px 10px;
+      overflow: hidden;
+      background: #fff;
+    }
+    .cardHeader { display:flex; justify-content:space-between; align-items:baseline; }
+    .cardTitle { font-weight: 900; }
+
+    /* ===== Modal Detail (dblclick) ===== */
+    .modalBackdrop {
+      display:none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.35);
+      z-index: 999;
+    }
+    .modal {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(1200px, 94vw);
+      height: min(820px, 92vh);
+      background: #fff;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 16px 60px rgba(0,0,0,0.35);
+    }
+    .modalHeader {
+      display:flex; align-items:center; justify-content:space-between; gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--gridline);
+      background: #fff;
+    }
+    .modalTitle { font-weight: 900; }
+    .modalSub { font-size: 12px; opacity: 0.75; }
+    .closeBtn {
+      width: 34px; height: 34px;
+      border-radius: 8px;
+      border: 1px solid #cfcfcf;
+      background: #fff;
+      font-size: 18px;
+      cursor: pointer;
+    }
+    .modalBody {
+      display:grid;
+      grid-template-columns: 520px 1fr;
+      height: calc(100% - 56px);
+    }
+    .panel { overflow: auto; padding: 10px 12px; }
+    .panel.right { border-left: 1px solid var(--gridline); }
+    .detailTable {
+      border: 2px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .detailHead {
+      display:grid;
+      grid-template-columns: 64px 110px 130px 1fr;
+      background: var(--blue);
+      border-bottom: 2px solid var(--border);
+      font-weight: 800;
+      font-size: 12px;
+    }
+    .dh { padding: 6px 8px; border-right: 1px solid var(--border); }
+    .dh:last-child { border-right: none; }
+    .detailRows {
+      display:grid;
+      grid-template-columns: 64px 110px 130px 1fr;
+      background: var(--pink);
+      font-size: 12px;
+    }
+    .dt, .dn, .dd {
+      padding: 4px 8px;
+      border-bottom: 1px solid rgba(0,0,0,0.18);
+      border-right: 1px solid rgba(0,0,0,0.18);
+      font-variant-numeric: tabular-nums;
+      display:flex; align-items:center;
+    }
+    .dt { background: var(--green); font-size: 11px; font-weight: 700; }
+    .dn { justify-content:flex-end; }
+    .dd { border-right: none; padding: 2px 8px; }
+    .miniNote { margin-top: 8px; font-size: 12px; opacity: 0.8; }
+    .chartCard {
+      border: 1px solid #d0d0d0;
+      border-radius: 10px;
+      padding: 8px 10px;
+      margin-bottom: 10px;
+      background: #fff;
+    }
+    .chartTitle { font-weight: 900; margin-bottom: 6px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div class="title">Excel風 Viewer（表示修正版）</div>
+      <div class="small">Home: OIS×JPY</div>
+      <div class="small">矢印 / PageUp / PageDown</div>
+      <div class="small">DoubleClick: 詳細</div>
+      <div style="margin-left:auto; display:flex; gap:10px; align-items:center;">
+        <div class="small">Date</div>
+        <select id="dateSelect"></select>
+        <div class="small">Zoom</div>
+        <select id="zoomSelect" class="zoom">
+          <option value="0.85">85%</option>
+          <option value="1" selected>100%</option>
+          <option value="1.15">115%</option>
+          <option value="1.3">130%</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="sheetWrap" class="sheetWrap" tabindex="0">
+      <div class="stickyTop">
+        <div class="corner">Product</div>
+        <div id="ccyHeaderRow" class="ccyHeaderRow"></div>
+      </div>
+
+      <div class="layer">
+        <div class="leftCol">
+          <div id="leftColInner" class="leftColInner"></div>
+        </div>
+        <div id="canvas" class="canvas"></div>
+      </div>
+    </div>
+
+    <!-- Bottom detail charts -->
+    <div class="detail">
+      <div class="card">
+        <div class="cardHeader">
+          <div class="cardTitle">Curve (Today vs Prev)</div>
+          <div class="small" id="selLabel1">-</div>
+        </div>
+        <div id="curvePlotBottom" style="width:100%; height:280px;"></div>
+      </div>
+      <div class="card">
+        <div class="cardHeader">
+          <div class="cardTitle">Scatter (Prev vs Today)</div>
+          <div class="small">点＝tenor</div>
+        </div>
+        <div id="scatterPlotBottom" style="width:100%; height:280px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail Modal -->
+  <div id="detailBackdrop" class="modalBackdrop" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+      <div class="modalHeader">
+        <div>
+          <div class="modalTitle" id="detailTitle">Detail</div>
+          <div class="modalSub" id="detailSub">-</div>
+        </div>
+        <button id="detailClose" class="closeBtn" title="Close (Esc)">×</button>
+      </div>
+      <div class="modalBody">
+        <div class="panel">
+          <div class="detailTable">
+            <div class="detailHead">
+              <div class="dh"></div>
+              <div class="dh">Today</div>
+              <div class="dh">Prev WorkDay</div>
+              <div class="dh">Diff</div>
+            </div>
+            <div id="detailRows" class="detailRows"></div>
+          </div>
+          <div class="miniNote">※Diffは product別p95スケールで±表示。棒が振り切れる場合は先端に●。</div>
+        </div>
+        <div class="panel right">
+          <div class="chartCard">
+            <div class="chartTitle">Curve (Today vs Prev)</div>
+            <div id="curvePlot" style="width:100%; height:320px;"></div>
+          </div>
+          <div class="chartCard">
+            <div class="chartTitle">Scatter (Prev vs Today)</div>
+            <div id="scatterPlot" style="width:100%; height:320px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/axios@1.7.7/dist/axios.min.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+
+  <script>
+    const HOME_PRODUCT = 'OIS';
+    const HOME_CCY = 'JPY';
+
+    const BLOCK_W = 380;
+    const BLOCK_H = 290;
+    const ROW_HDR_W = 110;
+    const TOP_HDR_H = 34;
+
+    function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+
+    function diffRowSvg(diffBp, scaleBp, w=200, h=10) {
+      const cx = w / 2;
+      const maxHalf = (w / 2) - 2;
+      const s = (scaleBp && !Number.isNaN(scaleBp) && scaleBp > 0) ? scaleBp : 1.0;
+      const line = `<line class="zeroLine" x1="${cx}" y1="1" x2="${cx}" y2="${h-1}"/>`;
+      if (diffBp === null || Number.isNaN(diffBp)) return `<svg class="diffSvg" width="${w}" height="${h}">${line}</svg>`;
+
+      const ratio = clamp(diffBp / s, -1, 1);
+      const len = Math.abs(ratio) * maxHalf;
+      const x = ratio >= 0 ? cx : (cx - len);
+      const clipped = Math.abs(diffBp) >= s && s > 0;
+
+      const bar = `<rect x="${x}" y="1" width="${len}" height="${h-2}" rx="1" fill="rgba(80,160,255,0.95)" />`;
+      const dot = clipped ? `<circle cx="${ratio>=0 ? cx+maxHalf : cx-maxHalf}" cy="${h/2}" r="2" fill="rgba(255,170,70,0.95)" />` : '';
+      return `<svg class="diffSvg" width="${w}" height="${h}">${line}${bar}${dot}</svg>`;
+    }
+
+    function fmt(v, digits=4) {
+      if (v === null || Number.isNaN(v)) return '';
+      return Number(v).toFixed(digits);
+    }
+
+    let meta = null;
+    let gridData = null;
+    let cellMap = null;
+    let currentDate = null;
+    let selected = { product: HOME_PRODUCT, currency: HOME_CCY };
+
+    const pool = [];
+    let poolSize = 0;
+
+    function key(p,c){ return p+'||'+c; }
+
+    function buildHeaders() {
+      const ccyRow = document.getElementById('ccyHeaderRow');
+      ccyRow.innerHTML = '';
+      meta.currencies.forEach(ccy => {
+        const d = document.createElement('div');
+        d.className = 'ccyHeader';
+        d.textContent = ccy;
+        ccyRow.appendChild(d);
+      });
+
+      const leftInner = document.getElementById('leftColInner');
+      leftInner.innerHTML = '';
+      leftInner.style.width = ROW_HDR_W + 'px';
+      leftInner.style.height = (meta.products.length * BLOCK_H) + 'px';
+      meta.products.forEach((p, i) => {
+        const d = document.createElement('div');
+        d.className = 'rowHeader';
+        d.style.top = (i * BLOCK_H) + 'px';
+        d.textContent = p;
+        leftInner.appendChild(d);
+      });
+    }
+
+    function ensureCanvasSize() {
+      const canvas = document.getElementById('canvas');
+      canvas.style.width = (meta.currencies.length * BLOCK_W) + 'px';
+      canvas.style.height = (meta.products.length * BLOCK_H) + 'px';
+    }
+
+    function createBlockDiv() {
+      const d = document.createElement('div');
+      d.className = 'block';
+      d.tabIndex = -1;
+      d.addEventListener('click', () => {
+        const p = d.dataset.product;
+        const c = d.dataset.currency;
+        if (p && c) {
+          selected = { product: p, currency: c };
+          renderSelected();
+          renderBottomCharts(p, c);
+        }
+      });
+      d.addEventListener('dblclick', (ev) => {
+        ev.preventDefault();
+        const p = d.dataset.product;
+        const c = d.dataset.currency;
+        if (p && c) openDetailModal(p, c);
+      });
+      return d;
+    }
+
+    function setZoom(z) {
+      const canvas = document.getElementById('canvas');
+      const leftInner = document.getElementById('leftColInner');
+      canvas.style.transform = `scale(${z})`;
+      leftInner.style.transform = `scale(${z})`;
+    }
+
+    function renderBlock(div, pIndex, cIndex) {
+      const p = meta.products[pIndex];
+      const c = meta.currencies[cIndex];
+      const cell = cellMap.get(key(p,c));
+      div.dataset.product = p;
+      div.dataset.currency = c;
+
+      div.style.left = (cIndex * BLOCK_W) + 'px';
+      div.style.top = (pIndex * BLOCK_H) + 'px';
+
+      const tenors = meta.tenors;
+      const today = cell?.today_rate_pct || [];
+      const prev = cell?.prev_rate_pct || [];
+      const diffs = cell?.diffs_bp || [];
+      const scale = cell?.scale_bp;
+
+      let body = '';
+      for (let i=0; i<tenors.length; i++) {
+        body += `
+          <div class="tcell">${tenors[i]}</div>
+          <div class="vcell">${fmt(today[i])}</div>
+          <div class="vcell">${fmt(prev[i])}</div>
+          <div class="diffcell">${diffRowSvg(diffs[i], scale)}</div>
+        `;
+      }
+
+      div.innerHTML = `
+        <div class="blockHeader">
+          <div class="hcell"></div>
+          <div class="hcell">Today</div>
+          <div class="hcell">Prev WorkDay</div>
+          <div class="hcell">Diff</div>
+        </div>
+        <div class="blockBody">${body}</div>
+      `;
+    }
+
+    function renderViewport() {
+      const wrap = document.getElementById('sheetWrap');
+      const canvas = document.getElementById('canvas');
+
+      const scrollLeft = wrap.scrollLeft;
+      const scrollTop = wrap.scrollTop;
+      const viewW = wrap.clientWidth;
+      const viewH = wrap.clientHeight;
+
+      const startC = Math.max(0, Math.floor((scrollLeft - ROW_HDR_W) / BLOCK_W));
+      const endC = Math.min(meta.currencies.length - 1, Math.floor((scrollLeft - ROW_HDR_W + viewW) / BLOCK_W) + 1);
+
+      const startP = Math.max(0, Math.floor((scrollTop) / BLOCK_H));
+      // note: canvas top is under sticky header, but scrollTop already includes it. Keeping simple.
+      const endP = Math.min(meta.products.length - 1, Math.floor((scrollTop + viewH) / BLOCK_H) + 1);
+
+      const need = (endP - startP + 1) * (endC - startC + 1);
+      if (need > poolSize) {
+        for (let i=poolSize; i<need; i++) {
+          const d = createBlockDiv();
+          canvas.appendChild(d);
+          pool.push(d);
+        }
+        poolSize = need;
+      }
+
+      let idx = 0;
+      for (let pi=startP; pi<=endP; pi++) {
+        for (let ci=startC; ci<=endC; ci++) {
+          const d = pool[idx++];
+          d.style.display = 'block';
+          renderBlock(d, pi, ci);
+        }
+      }
+      for (let i=idx; i<poolSize; i++) pool[i].style.display = 'none';
+
+      renderSelected();
+    }
+
+    function renderSelected() {
+      for (const d of pool) {
+        if (d.style.display === 'none') continue;
+        const match = d.dataset.product === selected.product && d.dataset.currency === selected.currency;
+        d.classList.toggle('selected', match);
+      }
+    }
+
+    function ensureSelectedVisible() {
+      const wrap = document.getElementById('sheetWrap');
+      const pIndex = meta.products.indexOf(selected.product);
+      const cIndex = meta.currencies.indexOf(selected.currency);
+      if (pIndex < 0 || cIndex < 0) return;
+
+      const x0 = ROW_HDR_W + cIndex * BLOCK_W;
+      const y0 = TOP_HDR_H + pIndex * BLOCK_H;
+      const x1 = x0 + BLOCK_W;
+      const y1 = y0 + BLOCK_H;
+
+      const vx0 = wrap.scrollLeft;
+      const vy0 = wrap.scrollTop;
+      const vx1 = vx0 + wrap.clientWidth;
+      const vy1 = vy0 + wrap.clientHeight;
+
+      let nx = vx0, ny = vy0;
+      if (x0 < vx0 + ROW_HDR_W) nx = x0 - ROW_HDR_W;
+      if (x1 > vx1) nx = x1 - wrap.clientWidth;
+      if (y0 < vy0 + TOP_HDR_H) ny = y0 - TOP_HDR_H;
+      if (y1 > vy1) ny = y1 - wrap.clientHeight;
+
+      wrap.scrollTo({ left: nx, top: ny, behavior: 'instant' });
+    }
+
+    function moveSel(dp, dc) {
+      const pi = meta.products.indexOf(selected.product);
+      const ci = meta.currencies.indexOf(selected.currency);
+      const npi = clamp(pi + dp, 0, meta.products.length - 1);
+      const nci = clamp(ci + dc, 0, meta.currencies.length - 1);
+      selected = { product: meta.products[npi], currency: meta.currencies[nci] };
+      ensureSelectedVisible();
+      renderViewport();
+      renderBottomCharts(selected.product, selected.currency);
+    }
+
+    function pageMove(dir) {
+      const wrap = document.getElementById('sheetWrap');
+      const blocksPerPage = Math.max(1, Math.floor((wrap.clientHeight - TOP_HDR_H) / BLOCK_H));
+      moveSel(dir * blocksPerPage, 0);
+    }
+
+    async function loadMeta() {
+      const res = await axios.get('/api/meta');
+      meta = res.data;
+
+      currentDate = meta.latest_date;
+      const sel = document.getElementById('dateSelect');
+      sel.innerHTML = meta.dates.map(d => `<option value="${d}" ${d===currentDate?'selected':''}>${d}</option>`).join('');
+      sel.addEventListener('change', async (e) => {
+        currentDate = e.target.value;
+        await loadGrid();
+        renderViewport();
+        renderBottomCharts(selected.product, selected.currency);
+      });
+
+      document.getElementById('zoomSelect').addEventListener('change', (e) => {
+        setZoom(parseFloat(e.target.value));
+      });
+
+      buildHeaders();
+      ensureCanvasSize();
+      setZoom(1);
+    }
+
+    async function loadGrid() {
+      const res = await axios.get('/api/grid', { params: { date: currentDate }});
+      gridData = res.data;
+      cellMap = new Map();
+      for (const cell of gridData.cells || []) {
+        cellMap.set(key(cell.product, cell.currency), cell);
+      }
+    }
+
+    function jumpHome() {
+      selected = { product: HOME_PRODUCT, currency: HOME_CCY };
+      ensureSelectedVisible();
+      renderViewport();
+      renderBottomCharts(selected.product, selected.currency);
+    }
+
+    function plotCurve(targetId, tenors, today, prev) {
+      const data = [
+        { x: tenors, y: today, type: 'scatter', mode: 'lines+markers', name: 'Today' },
+        { x: tenors, y: prev, type: 'scatter', mode: 'lines+markers', name: 'Prev WorkDay' },
+      ];
+      const layout = {
+        margin: { l: 50, r: 10, t: 10, b: 55 },
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: '#111' },
+        xaxis: { tickangle: -45 },
+      };
+      Plotly.react(targetId, data, layout, { displayModeBar: false, responsive: true });
+    }
+
+    function plotScatter(targetId, tenors, today, prev) {
+      const xs = prev.filter(v => Number.isFinite(v));
+      const ys = today.filter(v => Number.isFinite(v));
+      const minv = Math.min(...xs, ...ys, 0);
+      const maxv = Math.max(...xs, ...ys, 1);
+
+      const data = [
+        {
+          x: prev, y: today,
+          type: 'scatter', mode: 'markers',
+          text: tenors,
+          hovertemplate: 'tenor=%{text}<br>prev=%{x:.4f}<br>today=%{y:.4f}<extra></extra>',
+          name: 'Tenors'
+        },
+        { x: [minv, maxv], y: [minv, maxv], type: 'scatter', mode: 'lines', name: 'y=x', hoverinfo: 'skip', line: { dash: 'dot' } }
+      ];
+      const layout = {
+        margin: { l: 60, r: 10, t: 10, b: 55 },
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: '#111' },
+        xaxis: { title: 'Prev WorkDay' },
+        yaxis: { title: 'Today' },
+      };
+      Plotly.react(targetId, data, layout, { displayModeBar: false, responsive: true });
+    }
+
+    function renderBottomCharts(product, currency) {
+      const cell = cellMap?.get(key(product, currency));
+      if (!cell) return;
+      const tenors = meta.tenors;
+      const today = cell.today_rate_pct || [];
+      const prev = cell.prev_rate_pct || [];
+      document.getElementById('selLabel1').textContent = `${product} × ${currency} (${currentDate})`;
+      plotCurve('curvePlotBottom', tenors, today, prev);
+      plotScatter('scatterPlotBottom', tenors, today, prev);
+    }
+
+    // ===== Modal logic =====
+    function openDetailModal(product, currency) {
+      const back = document.getElementById('detailBackdrop');
+      const title = document.getElementById('detailTitle');
+      const sub = document.getElementById('detailSub');
+      const rows = document.getElementById('detailRows');
+
+      const cell = cellMap.get(key(product, currency));
+      const tenors = meta.tenors;
+      const today = cell?.today_rate_pct || [];
+      const prev = cell?.prev_rate_pct || [];
+      const diffs = cell?.diffs_bp || [];
+      const scale = cell?.scale_bp;
+
+      title.textContent = `${product} × ${currency}`;
+      sub.textContent = `${currentDate}   (Esc/×/背景クリックで閉じる)`;
+
+      let html = '';
+      for (let i=0; i<tenors.length; i++) {
+        html += `
+          <div class="dt">${tenors[i]}</div>
+          <div class="dn">${fmt(today[i])}</div>
+          <div class="dn">${fmt(prev[i])}</div>
+          <div class="dd">${diffRowSvg(diffs[i], scale, 260, 12)}</div>
+        `;
+      }
+      rows.innerHTML = html;
+
+      plotCurve('curvePlot', tenors, today, prev);
+      plotScatter('scatterPlot', tenors, today, prev);
+
+      back.style.display = 'block';
+      back.setAttribute('aria-hidden', 'false');
+    }
+
+    function closeDetailModal() {
+      const back = document.getElementById('detailBackdrop');
+      back.style.display = 'none';
+      back.setAttribute('aria-hidden', 'true');
+    }
+
+    document.getElementById('detailClose').addEventListener('click', closeDetailModal);
+    document.getElementById('detailBackdrop').addEventListener('click', (e) => {
+      if (e.target.id === 'detailBackdrop') closeDetailModal();
+    });
+
+    // ===== Init =====
+    (async function init() {
+      await loadMeta();
+      await loadGrid();
+
+      const wrap = document.getElementById('sheetWrap');
+      wrap.addEventListener('scroll', () => {
+        if (wrap._raf) return;
+        wrap._raf = requestAnimationFrame(() => {
+          wrap._raf = null;
+          renderViewport();
+        });
+      });
+
+      wrap.addEventListener('keydown', (e) => {
+        const k = e.key;
+        if (k === 'Home') { e.preventDefault(); jumpHome(); return; }
+        if (k === 'ArrowUp') { e.preventDefault(); moveSel(-1, 0); return; }
+        if (k === 'ArrowDown') { e.preventDefault(); moveSel(1, 0); return; }
+        if (k === 'ArrowLeft') { e.preventDefault(); moveSel(0, -1); return; }
+        if (k === 'ArrowRight') { e.preventDefault(); moveSel(0, 1); return; }
+        if (k === 'PageDown') { e.preventDefault(); pageMove(1); return; }
+        if (k === 'PageUp') { e.preventDefault(); pageMove(-1); return; }
+        if (k === 'Escape') { closeDetailModal(); return; }
+      });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetailModal(); });
+
+      setTimeout(() => { wrap.focus(); jumpHome(); }, 80);
+      renderViewport();
+    })();
+  </script>
+</body>
+</html>

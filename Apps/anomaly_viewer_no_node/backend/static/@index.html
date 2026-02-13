@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Anomaly Viewer (No Node)</title>
+
+  <!-- AG Grid (Community) via CDN -->
+  <link rel="stylesheet" href="https://unpkg.com/ag-grid-community/styles/ag-grid.css">
+  <link rel="stylesheet" href="https://unpkg.com/ag-grid-community/styles/ag-theme-quartz.css">
+
+  <style>
+    :root {
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      line-height: 1.2;
+      color-scheme: dark;
+    }
+    body { margin: 0; background: #0b0f14; color: #e8eef6; }
+    .app { display: grid; grid-template-rows: auto 1fr 340px; height: 100vh; }
+    .header {
+      display:flex; align-items:center; gap: 12px;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .title { font-weight: 800; letter-spacing: 0.2px; }
+    .small { opacity: 0.8; font-size: 12px; }
+    select {
+      background: #111926; color: #e8eef6;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 8px;
+      padding: 6px 10px;
+    }
+
+    .gridWrap { padding: 10px 12px; overflow: hidden; }
+    .ag-theme-quartz {
+      --ag-background-color: rgba(255,255,255,0.02);
+      --ag-foreground-color: #e8eef6;
+      --ag-header-foreground-color: #e8eef6;
+      --ag-header-background-color: rgba(255,255,255,0.05);
+      --ag-odd-row-background-color: rgba(255,255,255,0.015);
+      --ag-row-hover-color: rgba(255,255,255,0.06);
+      --ag-selected-row-background-color: rgba(100, 160, 255, 0.18);
+      --ag-border-color: rgba(255,255,255,0.08);
+      --ag-cell-horizontal-padding: 6px;
+      --ag-header-height: 34px;
+      --ag-row-height: 96px;
+    }
+
+    /* Detail */
+    .detail {
+      border-top: 1px solid rgba(255,255,255,0.08);
+      padding: 10px 12px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      background: #0d131c;
+    }
+    .card {
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.03);
+      border-radius: 12px;
+      padding: 10px;
+      overflow: hidden;
+    }
+    .cardHeader { display:flex; justify-content:space-between; align-items:baseline; }
+    .cardTitle { font-weight: 800; }
+
+    /* Cell renderer */
+    .cellFlex { display:flex; align-items:center; gap: 10px; }
+    .cellMeta { min-width: 70px; }
+    .cellMetaVal { font-weight: 800; }
+
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="header">
+      <div class="title">Anomaly Viewer (No Node)</div>
+      <div class="small">Home / Ctrl+Home: OIS×JPY</div>
+      <div class="small">矢印で巡回（Excel寄せ）</div>
+      <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+        <div class="small">Date</div>
+        <select id="dateSelect"></select>
+      </div>
+    </div>
+
+    <div class="gridWrap">
+      <div id="grid" class="ag-theme-quartz" style="width:100%; height:100%;"></div>
+    </div>
+
+    <div class="detail">
+      <div class="card">
+        <div class="cardHeader">
+          <div class="cardTitle">Curve (Today vs Prev)</div>
+          <div class="small" id="selLabel1">-</div>
+        </div>
+        <div id="curvePlot" style="width:100%; height:280px;"></div>
+      </div>
+      <div class="card">
+        <div class="cardHeader">
+          <div class="cardTitle">Scatter (Prev vs Today)</div>
+          <div class="small">点＝tenor</div>
+        </div>
+        <div id="scatterPlot" style="width:100%; height:280px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- axios + plotly via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/axios@1.7.7/dist/axios.min.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <script src="https://unpkg.com/ag-grid-community/dist/ag-grid-community.min.noStyle.js"></script>
+
+  <script>
+    const HOME_PRODUCT = 'OIS';
+    const HOME_CCY = 'JPY';
+
+    function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+
+    function sparkSvg(diffs, scaleBp) {
+      const W = 120, H = 84;
+      const padL = 2, padR = 2, padT = 2, padB = 2;
+      const innerW = W - padL - padR;
+      const innerH = H - padT - padB;
+      const n = diffs.length;
+      const rowH = n > 0 ? innerH / n : innerH;
+      const cx = padL + innerW / 2;
+      const maxHalf = innerW / 2 - 2;
+      const s = (scaleBp && !Number.isNaN(scaleBp) && scaleBp > 0) ? scaleBp : 1.0;
+
+      let parts = [];
+      // center line
+      parts.push(`<line x1="${cx}" y1="${padT}" x2="${cx}" y2="${padT+innerH}" stroke="rgba(255,255,255,0.15)" stroke-width="1" />`);
+
+      for (let i=0; i<n; i++) {
+        const v = diffs[i];
+        if (v === null || Number.isNaN(v)) continue;
+        const ratio = clamp(v / s, -1, 1);
+        const len = Math.abs(ratio) * maxHalf;
+        const y = padT + i * rowH + rowH * 0.18;
+        const h = Math.max(2, rowH * 0.64);
+        const x = ratio >= 0 ? cx : (cx - len);
+        const clipped = Math.abs(v) >= s && s > 0;
+
+        parts.push(`<rect x="${x}" y="${y}" width="${len}" height="${h}" rx="1.5" fill="rgba(120,200,255,0.85)" />`);
+        if (clipped) {
+          const dotx = ratio >= 0 ? (cx + maxHalf) : (cx - maxHalf);
+          parts.push(`<circle cx="${dotx}" cy="${y + h/2}" r="2.2" fill="rgba(255,220,120,0.95)" />`);
+        }
+      }
+      return `<svg width="${W}" height="${H}" style="display:block">${parts.join('')}</svg>`;
+    }
+
+    function cellRenderer(params) {
+      const v = params.value || {};
+      const diffs = v.diffs_bp || [];
+      const scale = v.scale_bp;
+      const maxAbs = v.max_abs_diff_bp;
+      const maxStr = Number.isFinite(maxAbs) ? maxAbs.toFixed(2) : '-';
+      return `
+        <div class="cellFlex">
+          ${sparkSvg(diffs, scale)}
+          <div class="cellMeta">
+            <div class="small">Max|Diff|</div>
+            <div class="cellMetaVal">${maxStr}</div>
+            <div class="small">bp</div>
+          </div>
+        </div>
+      `;
+    }
+
+    let meta = null;
+    let gridApi = null;
+    let gridData = null;
+    let selected = { product: HOME_PRODUCT, currency: HOME_CCY };
+    let currentDate = null;
+
+    async function loadMeta() {
+      const res = await axios.get('/api/meta');
+      meta = res.data;
+      currentDate = meta.latest_date;
+      const sel = document.getElementById('dateSelect');
+      sel.innerHTML = meta.dates.map(d => `<option value="${d}" ${d===currentDate?'selected':''}>${d}</option>`).join('');
+      sel.addEventListener('change', async (e) => {
+        currentDate = e.target.value;
+        await loadGrid();
+        await jumpHome();
+      });
+    }
+
+    async function loadGrid() {
+      const res = await axios.get('/api/grid', { params: { date: currentDate }});
+      gridData = res.data;
+
+      // Build rowData (one per product)
+      const products = gridData.products || [];
+      const currencies = gridData.currencies || [];
+      const cellMap = new Map();
+      (gridData.cells || []).forEach(cell => cellMap.set(`${cell.product}||${cell.currency}`, cell));
+
+      const rowData = products.map(p => {
+        const row = { product: p };
+        currencies.forEach(c => row[c] = cellMap.get(`${p}||${c}`) || { diffs_bp: [], max_abs_diff_bp: NaN, scale_bp: NaN });
+        return row;
+      });
+
+      // Build columnDefs
+      const colDefs = [
+        { field: 'product', headerName: 'Product', pinned: 'left', width: 120, cellStyle: { fontWeight: 800 } },
+        ...currencies.map(c => ({
+          field: c, headerName: c, width: 220, cellRenderer
+        }))
+      ];
+
+      const gridOptions = {
+        columnDefs: colDefs,
+        rowData,
+        rowSelection: 'single',
+        suppressRowClickSelection: true,
+        animateRows: false,
+        defaultColDef: { resizable: true, sortable: false },
+        onGridReady: (params) => { gridApi = params.api; },
+        onCellFocused: (e) => {
+          const colId = e.column ? e.column.getColId() : null;
+          if (!colId || colId === 'product') return;
+          const rowNode = e.api.getDisplayedRowAtIndex(e.rowIndex);
+          if (!rowNode) return;
+          const product = rowNode.data.product;
+          const currency = colId;
+          selected = { product, currency };
+          updateDetail();
+        }
+      };
+
+      const gridDiv = document.getElementById('grid');
+      gridDiv.innerHTML = '';
+      agGrid.createGrid(gridDiv, gridOptions);
+    }
+
+    async function updateDetail() {
+      const label = `${selected.product} × ${selected.currency}`;
+      document.getElementById('selLabel1').textContent = label;
+
+      const res = await axios.get('/api/detail', { params: { date: currentDate, product: selected.product, currency: selected.currency }});
+      const d = res.data;
+
+      // Curve
+      const curveData = [
+        { x: d.tenors, y: d.today, type: 'scatter', mode: 'lines+markers', name: 'Today' },
+        { x: d.tenors, y: d.prev, type: 'scatter', mode: 'lines+markers', name: 'PrevWorkDay' },
+      ];
+      const curveLayout = {
+        margin: { l: 40, r: 10, t: 20, b: 40 },
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: '#e8eef6' },
+        xaxis: { tickangle: -45 },
+      };
+      Plotly.react('curvePlot', curveData, curveLayout, { displayModeBar: false, responsive: true });
+
+      // Scatter
+      const xs = (d.prev || []).filter(v => Number.isFinite(v));
+      const ys = (d.today || []).filter(v => Number.isFinite(v));
+      const minv = Math.min(...xs, ...ys, 0);
+      const maxv = Math.max(...xs, ...ys, 1);
+
+      const scatterData = [
+        {
+          x: d.prev, y: d.today, type: 'scatter', mode: 'markers',
+          text: d.tenors,
+          hovertemplate: 'tenor=%{text}<br>prev=%{x:.4f}<br>today=%{y:.4f}<extra></extra>',
+          name: 'Tenors'
+        },
+        { x: [minv, maxv], y: [minv, maxv], type: 'scatter', mode: 'lines', name: 'y=x', hoverinfo: 'skip', line: { dash: 'dot' } }
+      ];
+      const scatterLayout = {
+        margin: { l: 50, r: 10, t: 20, b: 45 },
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: '#e8eef6' },
+        xaxis: { title: 'PrevWorkDay' },
+        yaxis: { title: 'Today' },
+      };
+      Plotly.react('scatterPlot', scatterData, scatterLayout, { displayModeBar: false, responsive: true });
+    }
+
+    async function jumpHome() {
+      if (!gridApi || !gridData) return;
+      const products = gridData.products || [];
+      const rowIndex = Math.max(0, products.indexOf(HOME_PRODUCT));
+      gridApi.ensureIndexVisible(rowIndex, 'middle');
+      gridApi.setFocusedCell(rowIndex, HOME_CCY);
+      selected = { product: HOME_PRODUCT, currency: HOME_CCY };
+      await updateDetail();
+    }
+
+    // Global key handling (Home / Ctrl+Home)
+    document.addEventListener('keydown', async (e) => {
+      if (e.key === 'Home') {
+        e.preventDefault();
+        await jumpHome();
+      }
+    }, { passive: false });
+
+    (async function init() {
+      await loadMeta();
+      await loadGrid();
+      // Wait a tick for grid api
+      setTimeout(() => { jumpHome(); }, 80);
+    })();
+  </script>
+</body>
+</html>
